@@ -1,17 +1,13 @@
--- LocalScript (FE-safe) -----------------------
+-- Fake Block LocalScript (FE-safe) - modified to reapply infinite stamina on respawn + load config
 -- Place in StarterPlayerScripts or under a ScreenGui in PlayerGui
--- Features:
---  - Left/medium draggable GUI
---  - Mode toggle (Normal / M3&4) + Q hotkey
---  - Fake Block button (plays animation for current mode)
---  - Special Block button (plays Special animation OR uses current mode via toggle)
---  - Visual pulse effect while animation plays
---  - Normal sound selector cycles through OFF / Default / Alt1 / Alt2 / Alt3
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
+
+-- ADDED: control for infinite stamina (default off)
+local infiniteStamina = false -- set true to enable infinite-stamina behavior
 
 -- Animation IDs
 local animationIds = {
@@ -20,13 +16,13 @@ local animationIds = {
     Special  = "95802026624883"
 }
 
--- Normal sound options (index 1 = OFF). Added Alt 3 per your latest id.
+-- Normal sound options (index 1 = OFF).
 local normalSoundOptions = {
     {label = "OFF",     id = ""},
     {label = "Default", id = "rbxassetid://105905509045149"},
     {label = "Alt 1",   id = "rbxassetid://8028421882"},
     {label = "Alt 2",   id = "rbxassetid://83036817079068"},
-    {label = "Alt 3",   id = "rbxassetid://9089408772"} -- <- newly added
+    {label = "Alt 3",   id = "rbxassetid://9089408772"}
 }
 
 -- state
@@ -401,6 +397,74 @@ player.CharacterAdded:Connect(function()
         currentTrack = nil
     end
 end)
+
+-- ADDED: enableInfiniteStamina implementation (safe fallback)
+local function enableInfiniteStamina()
+    -- try known module path (wrapped in pcall)
+    local ok, StaminaModule = pcall(function()
+        local root = game:GetService("ReplicatedStorage")
+        -- attempt common path, may error if not present; pcall avoids crash
+        if root and root:FindFirstChild("Systems")
+           and root.Systems:FindFirstChild("Character")
+           and root.Systems.Character:FindFirstChild("Game")
+           and root.Systems.Character.Game:FindFirstChild("Sprinting") then
+            return require(root.Systems.Character.Game.Sprinting)
+        end
+        return nil
+    end)
+
+    if ok and StaminaModule then
+        -- best-effort: try to disable stamina loss and top up stamina periodically
+        pcall(function() StaminaModule.StaminaLossDisabled = true end)
+        task.spawn(function()
+            while infiniteStamina and StaminaModule do
+                task.wait(0.1)
+                pcall(function()
+                    if StaminaModule.MaxStamina then
+                        StaminaModule.Stamina = StaminaModule.MaxStamina
+                    else
+                        StaminaModule.Stamina = 100
+                    end
+                    if StaminaModule.StaminaChanged and typeof(StaminaModule.StaminaChanged.Fire) == "function" then
+                        StaminaModule.StaminaChanged:Fire()
+                    end
+                end)
+            end
+        end)
+        return
+    end
+
+    -- fallback: find NumberValue named "Stamina" in character and keep it topped up
+    task.spawn(function()
+        while infiniteStamina do
+            task.wait(0.2)
+            local char = player.Character
+            if char then
+                for _, v in ipairs(char:GetDescendants()) do
+                    if v:IsA("NumberValue") and v.Name:lower():find("stamina") then
+                        pcall(function()
+                            v.Value = (v.Value ~= nil and v.Value) and math.max(v.Value, 100) or 100
+                        end)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- ADDED: reapply infinite stamina when character respawns
+player.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    if infiniteStamina then
+        pcall(enableInfiniteStamina)
+    end
+end)
+
+-- Load saved UI config if a Rayfield-like lib exists (safe check)
+-- ADDED: call Rayfield:LoadConfiguration() only when Rayfield variable exists and has method
+if typeof(Rayfield) == "table" and type(Rayfield.LoadConfiguration) == "function" then
+    pcall(function() Rayfield:LoadConfiguration() end)
+end
 
 -- init UI text
 updateModeUI()
