@@ -1,0 +1,406 @@
+-- LocalScript (FE-safe) -----------------------
+-- Place in StarterPlayerScripts or under a ScreenGui in PlayerGui
+-- Features:
+--  - Left/medium draggable GUI
+--  - Mode toggle (Normal / M3&4) + Q hotkey
+--  - Fake Block button (plays animation for current mode)
+--  - Special Block button (plays Special animation OR uses current mode via toggle)
+--  - Visual pulse effect while animation plays
+--  - Normal sound selector cycles through OFF / Default / Alt1 / Alt2 / Alt3
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local player = Players.LocalPlayer
+
+-- Animation IDs
+local animationIds = {
+    Normal   = "72722244508749",
+    ["M3&4"] = "96959123077498",
+    Special  = "95802026624883"
+}
+
+-- Normal sound options (index 1 = OFF). Added Alt 3 per your latest id.
+local normalSoundOptions = {
+    {label = "OFF",     id = ""},
+    {label = "Default", id = "rbxassetid://105905509045149"},
+    {label = "Alt 1",   id = "rbxassetid://8028421882"},
+    {label = "Alt 2",   id = "rbxassetid://83036817079068"},
+    {label = "Alt 3",   id = "rbxassetid://9089408772"} -- <- newly added
+}
+
+-- state
+local mode = "Normal" -- "Normal" or "M3&4"
+local specialUseMode = false -- when true, Special button uses current mode animation
+local normalSoundIndex = 1 -- 1..#normalSoundOptions, default OFF
+
+-- Create/reuse ScreenGui
+local guiName = "FakeBlockLeftGui"
+local screenGui = player:WaitForChild("PlayerGui"):FindFirstChild(guiName)
+if not screenGui then
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = guiName
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+    screenGui.ResetOnSpawn = false
+end
+
+-- Build mainFrame if missing
+local mainFrame = screenGui:FindFirstChild("MainFrame")
+if not mainFrame then
+    mainFrame = Instance.new("Frame")
+    mainFrame.Name = "MainFrame"
+    mainFrame.Parent = screenGui
+    mainFrame.AnchorPoint = Vector2.new(0, 0.5)
+    mainFrame.Position = UDim2.new(0, 10, 0.5, 0)
+    mainFrame.Size = UDim2.new(0, 260, 0, 220)
+    mainFrame.BackgroundTransparency = 0.12
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.ClipsDescendants = true
+    Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+    -- Title
+    local title = Instance.new("TextLabel", mainFrame)
+    title.Name = "Title"
+    title.Size = UDim2.new(1, -12, 0, 28)
+    title.Position = UDim2.new(0, 6, 0, 6)
+    title.BackgroundTransparency = 1
+    title.Text = "Fake Block"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(240,240,240)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Mode label
+    local modeLabel = Instance.new("TextLabel", mainFrame)
+    modeLabel.Name = "ModeLabel"
+    modeLabel.Size = UDim2.new(0.6, -8, 0, 32)
+    modeLabel.Position = UDim2.new(0, 6, 0, 38)
+    modeLabel.BackgroundTransparency = 0.18
+    modeLabel.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    modeLabel.Font = Enum.Font.Gotham
+    modeLabel.TextSize = 14
+    modeLabel.TextColor3 = Color3.fromRGB(220,220,220)
+    modeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    modeLabel.ClipsDescendants = true
+    Instance.new("UICorner", modeLabel).CornerRadius = UDim.new(0,8)
+
+    -- Toggle button (right of mode)
+    local toggleBtn = Instance.new("TextButton", mainFrame)
+    toggleBtn.Name = "ToggleBtn"
+    toggleBtn.Size = UDim2.new(0.34, -8, 0, 32)
+    toggleBtn.Position = UDim2.new(0.66, 6, 0, 38)
+    toggleBtn.BackgroundTransparency = 0.06
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(45,45,45)
+    toggleBtn.Text = "Toggle"
+    toggleBtn.Font = Enum.Font.GothamSemibold
+    toggleBtn.TextSize = 13
+    toggleBtn.TextColor3 = Color3.fromRGB(240,240,240)
+    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0,8)
+
+    -- Fake block button
+    local fakeBlockBtn = Instance.new("TextButton", mainFrame)
+    fakeBlockBtn.Name = "FakeBlockBtn"
+    fakeBlockBtn.Size = UDim2.new(1, -12, 0, 36)
+    fakeBlockBtn.Position = UDim2.new(0, 6, 0, 78)
+    fakeBlockBtn.BackgroundTransparency = 0
+    fakeBlockBtn.BackgroundColor3 = Color3.fromRGB(66,135,245)
+    fakeBlockBtn.Text = "Fake Block"
+    fakeBlockBtn.Font = Enum.Font.GothamBold
+    fakeBlockBtn.TextSize = 16
+    fakeBlockBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    Instance.new("UICorner", fakeBlockBtn).CornerRadius = UDim.new(0,8)
+
+    -- Special block button
+    local specialBtn = Instance.new("TextButton", mainFrame)
+    specialBtn.Name = "SpecialBlockBtn"
+    specialBtn.Size = UDim2.new(1, -12, 0, 36)
+    specialBtn.Position = UDim2.new(0, 6, 0, 120)
+    specialBtn.BackgroundTransparency = 0
+    specialBtn.BackgroundColor3 = Color3.fromRGB(160, 80, 220)
+    specialBtn.Text = "Special Block"
+    specialBtn.Font = Enum.Font.GothamBold
+    specialBtn.TextSize = 16
+    specialBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    Instance.new("UICorner", specialBtn).CornerRadius = UDim.new(0,8)
+
+    -- Special-use-mode toggle
+    local specialToggle = Instance.new("TextButton", mainFrame)
+    specialToggle.Name = "SpecialUseModeToggle"
+    specialToggle.Size = UDim2.new(0.5, -8, 0, 24)
+    specialToggle.Position = UDim2.new(0, 6, 1, -28)
+    specialToggle.BackgroundTransparency = 0.06
+    specialToggle.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    specialToggle.Font = Enum.Font.Gotham
+    specialToggle.TextSize = 13
+    specialToggle.TextColor3 = Color3.fromRGB(220,220,220)
+    specialToggle.Text = "Use Mode: OFF"
+    Instance.new("UICorner", specialToggle).CornerRadius = UDim.new(0,6)
+
+    -- Normal sound selector (cycles through options)
+    local normalSoundToggle = Instance.new("TextButton", mainFrame)
+    normalSoundToggle.Name = "NormalSoundToggle"
+    normalSoundToggle.Size = UDim2.new(0.5, -8, 0, 24)
+    normalSoundToggle.Position = UDim2.new(0.5, 2, 1, -28)
+    normalSoundToggle.BackgroundTransparency = 0.06
+    normalSoundToggle.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    normalSoundToggle.Font = Enum.Font.Gotham
+    normalSoundToggle.TextSize = 13
+    normalSoundToggle.TextColor3 = Color3.fromRGB(220,220,220)
+    normalSoundToggle.Text = "Normal Sound: OFF"
+    Instance.new("UICorner", normalSoundToggle).CornerRadius = UDim.new(0,6)
+
+    -- Drag hint
+    local hint = Instance.new("TextLabel", mainFrame)
+    hint.Name = "DragHint"
+    hint.Size = UDim2.new(0.5, -8, 0, 18)
+    hint.Position = UDim2.new(0, 6, 0, 160)
+    hint.BackgroundTransparency = 1
+    hint.Text = "Drag me"
+    hint.Font = Enum.Font.Gotham
+    hint.TextSize = 12
+    hint.TextColor3 = Color3.fromRGB(180,180,180)
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+-- references
+local ModeLabel = mainFrame:FindFirstChild("ModeLabel")
+local ToggleBtn = mainFrame:FindFirstChild("ToggleBtn")
+local fakeBlockBtn = mainFrame:FindFirstChild("FakeBlockBtn")
+local specialBtn = mainFrame:FindFirstChild("SpecialBlockBtn")
+local specialToggle = mainFrame:FindFirstChild("SpecialUseModeToggle")
+local normalSoundToggle = mainFrame:FindFirstChild("NormalSoundToggle")
+
+-- Visual pulse overlay
+local pulse = mainFrame:FindFirstChild("PulseFrame")
+if not pulse then
+    pulse = Instance.new("Frame")
+    pulse.Name = "PulseFrame"
+    pulse.Size = UDim2.new(1, 0, 1, 0)
+    pulse.Position = UDim2.new(0, 0, 0, 0)
+    pulse.BackgroundTransparency = 1
+    pulse.ZIndex = 50
+    pulse.Parent = mainFrame
+    Instance.new("UICorner", pulse).CornerRadius = UDim.new(0, 10)
+end
+
+-- single Sound instance reused for Normal playback
+local normalSound = mainFrame:FindFirstChild("NormalBlockSound")
+if not normalSound then
+    normalSound = Instance.new("Sound", mainFrame)
+    normalSound.Name = "NormalBlockSound"
+    normalSound.Looped = false
+    normalSound.Volume = 0.9
+end
+
+-- helper: get local humanoid
+local function getHumanoid()
+    local char = player.Character
+    if not char then return nil end
+    return char:FindFirstChildOfClass("Humanoid")
+end
+
+-- animation + sound play (debounced)
+local currentTrack = nil
+local animDebounce = false
+local function playLocalAnimation(animId)
+    if animDebounce then return end
+    animDebounce = true
+
+    local humanoid = getHumanoid()
+    if not humanoid then
+        animDebounce = false
+        return
+    end
+
+    if currentTrack then
+        pcall(function() currentTrack:Stop() end)
+        pcall(function() currentTrack:Destroy() end)
+        currentTrack = nil
+    end
+
+    local anim = Instance.new("Animation")
+    anim.Name = "LocalFakeBlockAnim"
+    anim.AnimationId = "rbxassetid://" .. tostring(animId)
+
+    local ok, track = pcall(function() return humanoid:LoadAnimation(anim) end)
+    if not ok or not track then
+        warn("Failed to load animation:", animId)
+        anim:Destroy()
+        animDebounce = false
+        return
+    end
+
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = false
+    currentTrack = track
+
+    local success, err = pcall(function() track:Play() end)
+    if not success then
+        warn("Failed to play animation:", err)
+        currentTrack = nil
+        anim:Destroy()
+        animDebounce = false
+        return
+    end
+
+    -- Play selected normal sound when mode is Normal and selection isn't OFF
+    if mode == "Normal" and normalSoundOptions[normalSoundIndex] and normalSoundOptions[normalSoundIndex].id ~= "" then
+        local sid = normalSoundOptions[normalSoundIndex].id
+        pcall(function()
+            normalSound:Stop()
+            normalSound.SoundId = sid
+            normalSound:Play()
+        end)
+    end
+
+    -- Pulse visual
+    spawn(function()
+        pulse.BackgroundTransparency = 1
+        pulse.BackgroundColor3 = Color3.fromRGB(255,255,255)
+        TweenService:Create(pulse, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency = 0.85}):Play()
+        local origSize = pulse.Size
+        local pop = TweenService:Create(pulse, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1.04, 0, 1.04, 0), Position = UDim2.new(-0.02,0,-0.02,0)})
+        pop:Play()
+        wait(0.25)
+        TweenService:Create(pulse, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {BackgroundTransparency = 1, Size = origSize, Position = UDim2.new(0,0,0,0)}):Play()
+    end)
+
+    -- cleanup when stops (with timeout)
+    spawn(function()
+        local stopped = false
+        local conn
+        conn = track.Stopped:Connect(function()
+            stopped = true
+            if conn then conn:Disconnect() end
+        end)
+        local t = 0
+        local timeout = 6
+        while not stopped and t < timeout do
+            wait(0.1)
+            t = t + 0.1
+        end
+        pcall(function() track:Stop() end)
+        pcall(function() track:Destroy() end)
+        currentTrack = nil
+        animDebounce = false
+    end)
+end
+
+-- UI helpers
+local function updateModeUI()
+    if ModeLabel then ModeLabel.Text = "Mode: " .. mode end
+    if specialToggle then
+        specialToggle.Text = "Use Mode: " .. (specialUseMode and "ON" or "OFF")
+    end
+    if normalSoundToggle then
+        normalSoundToggle.Text = "Normal Sound: " .. normalSoundOptions[normalSoundIndex].label
+    end
+end
+
+local function toggleMode()
+    if mode == "Normal" then mode = "M3&4" else mode = "Normal" end
+    updateModeUI()
+end
+
+-- cycle normal sound selection
+local function cycleNormalSound()
+    normalSoundIndex = normalSoundIndex + 1
+    if normalSoundIndex > #normalSoundOptions then normalSoundIndex = 1 end
+    updateModeUI()
+end
+
+-- Connect UI
+if ToggleBtn then
+    ToggleBtn.MouseButton1Click:Connect(toggleMode)
+end
+if ModeLabel then
+    ModeLabel.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then toggleMode() end
+    end)
+end
+if fakeBlockBtn then
+    fakeBlockBtn.MouseButton1Click:Connect(function()
+        local id = animationIds[mode] or animationIds.Normal
+        playLocalAnimation(id)
+    end)
+end
+if specialBtn then
+    specialBtn.MouseButton1Click:Connect(function()
+        local id
+        if specialUseMode then
+            id = animationIds[mode] or animationIds.Normal
+        else
+            id = animationIds.Special or animationIds.Normal
+        end
+        playLocalAnimation(id)
+    end)
+end
+if specialToggle then
+    specialToggle.MouseButton1Click:Connect(function()
+        specialUseMode = not specialUseMode
+        updateModeUI()
+    end)
+end
+if normalSoundToggle then
+    normalSoundToggle.MouseButton1Click:Connect(function()
+        cycleNormalSound()
+    end)
+end
+
+-- Q toggles modes
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.Q then
+        toggleMode()
+    end
+end)
+
+-- draggable mainFrame
+do
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                                       startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+
+    mainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainFrame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    mainFrame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+end
+
+-- cleanup animations on respawn
+player.CharacterAdded:Connect(function()
+    if currentTrack then
+        pcall(function() currentTrack:Stop() end)
+        pcall(function() currentTrack:Destroy() end)
+        currentTrack = nil
+    end
+end)
+
+-- init UI text
+updateModeUI()
